@@ -28,6 +28,21 @@ docker compose ps
 curl --fail http://127.0.0.1:3000/healthz
 ```
 
+### Native systemd service
+
+For a native Node deployment on the current host, install the included unit after building:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+install -m 0644 deploy/file-upload.service /etc/systemd/system/file-upload.service
+systemctl daemon-reload
+systemctl enable --now file-upload.service
+systemctl status file-upload.service --no-pager
+```
+
+The unit reads `/root/file-upload/.env`, stores uploads in `/root/file-upload/data`, listens on port `3000`, and restarts automatically after failures and reboots.
+
 Allow port 3000 only from the Nginx Proxy Manager host or trusted LAN. Do not expose the origin port directly to the internet.
 
 ## 2. Configure Nginx Proxy Manager
@@ -70,11 +85,11 @@ Public `/f/*` responses are immutable and may be cached. Deletion removes the or
 Use a synthetic file with no secrets:
 
 ```bash
-printf 'slop deployment check\n' > /tmp/slop-deployment-check.txt
+printf 'file-upload deployment check\n' > /tmp/file-upload-deployment-check.txt
 curl --fail-with-body \
-  -X PUT -T /tmp/slop-deployment-check.txt \
+  -X PUT -T /tmp/file-upload-deployment-check.txt \
   -H "X-Upload-Token: $FILE_HOST_TOKEN" \
-  https://files.lbgos.dev/slop-deployment-check.txt
+  https://files.lbgos.dev/file-upload-deployment-check.txt
 ```
 
 Open the returned URL, verify its bytes, then delete it through the API. Also test one recording near the expected real-world size; local tests cannot prove Cloudflare and Nginx limits.

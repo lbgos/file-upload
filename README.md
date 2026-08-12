@@ -23,7 +23,7 @@
 Requires Docker and Docker Compose.
 
 ```bash
-git clone <repository-url> file-upload
+git clone https://github.com/lbgos/file-upload.git
 cd file-upload
 cp .env.example .env
 openssl rand -hex 32
