@@ -1,0 +1,4 @@
+interface:
+  display_name: "File Upload"
+  short_description: "Upload local artifacts and return public URLs"
+  default_prompt: "Use $file-upload to upload a local artifact and return its shareable URL."
