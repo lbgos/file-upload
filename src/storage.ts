@@ -1,37 +1,24 @@
+/**
+ * On-disk layout: `<dataDir>/files/<id>/<name>` holds exactly one published file.
+ * Uploads are written to `<dataDir>/tmp/<id>/` and renamed into place when complete.
+ */
 import { randomBytes } from "node:crypto";
-import {
-  mkdir,
-  open,
-  readdir,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, open, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { Transform, type TransformCallback } from "node:stream";
+import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Readable } from "node:stream";
 
 const FILE_ID = /^[a-f0-9]{32}$/u;
-const MAX_FILENAME_BYTES = 90;
+const MAX_FILENAME_LENGTH = 90;
+const MAX_EXTENSION_LENGTH = 16;
 
-export type StagedUpload = {
-  id: string;
-  name: string;
-  size: number;
-  tempDir: string;
-};
-
-export type StoredFile = {
-  id: string;
-  name: string;
-  size: number;
-  path: string;
-};
+export type StagedUpload = { id: string; name: string; tempDir: string };
+export type StoredFile = { name: string; size: number; path: string };
 
 export class UploadTooLargeError extends Error {}
 
+/** Counts bytes and drops everything past the limit, so the request still drains and can get a 413. */
 class ByteLimitStream extends Transform {
   exceeded = false;
   #received = 0;
@@ -42,73 +29,48 @@ class ByteLimitStream extends Transform {
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
     this.#received += chunk.length;
-    if (this.#received > this.maxBytes) {
-      this.exceeded = true;
-      callback();
-      return;
-    }
-    callback(null, chunk);
+    if (this.#received > this.maxBytes) this.exceeded = true;
+    callback(null, this.exceeded ? undefined : chunk);
   }
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
-  let result = "";
-  for (const character of value) {
-    if (Buffer.byteLength(result + character) > maxBytes) break;
-    result += character;
-  }
-  return result;
-}
-
-export function sanitizeFilename(input: string): string {
-  const normalized = input
-    .normalize("NFC")
-    .replace(/[\u0000-\u001f\u007f]/gu, "")
-    .replace(/[\\/]+/gu, "-")
-    .replace(/\s+/gu, " ")
-    .replace(/^[-. ]+|[-. ]+$/gu, "");
-
-  if (!normalized) return "file";
-  if (Buffer.byteLength(normalized) <= MAX_FILENAME_BYTES) return normalized;
-
-  const extensionIndex = normalized.lastIndexOf(".");
-  const hasExtension = extensionIndex > 0 && normalized.length - extensionIndex <= 20;
-  const extension = hasExtension ? normalized.slice(extensionIndex) : "";
-  const stem = hasExtension ? normalized.slice(0, extensionIndex) : normalized;
-  const available = MAX_FILENAME_BYTES - Buffer.byteLength(extension);
-  return `${truncateUtf8(stem, available)}${extension}` || "file";
-}
-
-export function publicFilename(input: string): string {
-  const safe = sanitizeFilename(input);
-  const extensionIndex = safe.lastIndexOf(".");
-  const hasExtension = extensionIndex > 0 && safe.length - extensionIndex <= 20;
-  const rawStem = hasExtension ? safe.slice(0, extensionIndex) : safe;
-  const extension = hasExtension
-    ? safe.slice(extensionIndex).toLowerCase().replace(/[^.a-z0-9]/gu, "")
-    : "";
-  const stem = rawStem
+function slug(value: string): string {
+  return value
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/gu, "")
+    .replace(/[̀-ͯ]/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "") || "file";
-  const suffix = randomBytes(4).toString("hex");
-  const availableStemBytes = MAX_FILENAME_BYTES - Buffer.byteLength(extension) - suffix.length - 1;
-  return `${truncateUtf8(stem, availableStemBytes)}-${suffix}${extension}`;
+    .replace(/^-+|-+$/gu, "");
+}
+
+/** Turns any client filename into an ASCII slug with a random suffix: `Login Flow.WEBM` -> `login-flow-1a2b3c4d.webm`. */
+export function publicFilename(input: string): string {
+  const dot = input.lastIndexOf(".");
+  const extension = dot > 0 ? input.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/gu, "") : "";
+  const hasExtension = extension.length > 0 && extension.length <= MAX_EXTENSION_LENGTH;
+  const tail = `-${randomBytes(4).toString("hex")}${hasExtension ? `.${extension}` : ""}`;
+  const stem = slug(hasExtension ? input.slice(0, dot) : input) || "file";
+  return `${stem.slice(0, MAX_FILENAME_LENGTH - tail.length).replace(/-+$/u, "")}${tail}`;
 }
 
 export function isValidFileId(value: string): boolean {
   return FILE_ID.test(value);
 }
 
-export function storagePaths(dataDir: string) {
-  return {
-    files: path.join(dataDir, "files"),
-    temp: path.join(dataDir, "tmp"),
-  };
+function storagePaths(dataDir: string) {
+  return { files: path.join(dataDir, "files"), temp: path.join(dataDir, "tmp") };
 }
 
+async function fsync(target: string): Promise<void> {
+  const handle = await open(target, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Creates the storage directories and removes uploads interrupted by a previous crash. */
 export async function prepareStorage(dataDir: string): Promise<void> {
   const paths = storagePaths(dataDir);
   await mkdir(paths.files, { recursive: true, mode: 0o750 });
@@ -124,32 +86,22 @@ export async function prepareStorage(dataDir: string): Promise<void> {
 export async function stageUpload(
   dataDir: string,
   filename: string,
-  stream: Readable & { truncated?: boolean },
+  stream: Readable,
   maxBytes: number,
 ): Promise<StagedUpload> {
-  const paths = storagePaths(dataDir);
   const id = randomBytes(16).toString("hex");
   const name = publicFilename(filename);
-  const tempDir = path.join(paths.temp, id);
+  const tempDir = path.join(storagePaths(dataDir).temp, id);
   const tempFile = path.join(tempDir, name);
   await mkdir(tempDir, { mode: 0o700 });
 
   try {
     const limiter = new ByteLimitStream(maxBytes);
     await pipeline(stream, limiter, createWriteStream(tempFile, { flags: "wx", mode: 0o640 }));
-    if (stream.truncated || limiter.exceeded) throw new UploadTooLargeError("File exceeds MAX_FILE_BYTES");
-
-    const handle = await open(tempFile, "r");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-
-    const info = await stat(tempFile);
-    return { id, name, size: info.size, tempDir };
+    if (limiter.exceeded) throw new UploadTooLargeError("File exceeds MAX_FILE_BYTES");
+    await fsync(tempFile);
+    return { id, name, tempDir };
   } catch (error) {
-    if (!stream.destroyed) stream.resume();
     await rm(tempDir, { recursive: true, force: true });
     throw error;
   }
@@ -158,29 +110,19 @@ export async function stageUpload(
 export async function publishUpload(dataDir: string, upload: StagedUpload): Promise<void> {
   const { files } = storagePaths(dataDir);
   await rename(upload.tempDir, path.join(files, upload.id));
-  const handle = await open(files, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await fsync(files);
 }
 
-export async function discardUpload(upload: StagedUpload | undefined): Promise<void> {
-  if (upload) await rm(upload.tempDir, { recursive: true, force: true });
-}
-
-export async function findFile(
-  dataDir: string,
-  id: string,
-  requestedName: string,
-): Promise<StoredFile | undefined> {
-  if (!isValidFileId(id) || sanitizeFilename(requestedName) !== requestedName) return undefined;
-  const filePath = path.join(storagePaths(dataDir).files, id, requestedName);
+/** Returns the stored file only when `name` matches the one entry in its directory exactly. */
+export async function findFile(dataDir: string, id: string, name: string): Promise<StoredFile | undefined> {
+  if (!isValidFileId(id)) return undefined;
+  const directory = path.join(storagePaths(dataDir).files, id);
   try {
+    const [stored] = await readdir(directory);
+    if (stored !== name) return undefined;
+    const filePath = path.join(directory, stored);
     const info = await stat(filePath);
-    if (!info.isFile()) return undefined;
-    return { id, name: requestedName, size: info.size, path: filePath };
+    return info.isFile() ? { name, size: info.size, path: filePath } : undefined;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -200,6 +142,6 @@ export async function deleteFile(dataDir: string, id: string): Promise<boolean> 
   return true;
 }
 
-export function openFileStream(file: StoredFile, start?: number, end?: number) {
-  return createReadStream(file.path, start === undefined ? undefined : { start, end });
+export function openFileStream(file: StoredFile, range?: { start: number; end: number }) {
+  return createReadStream(file.path, range);
 }

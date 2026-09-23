@@ -4,28 +4,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { isValidFileId, prepareStorage, publicFilename, sanitizeFilename } from "../src/storage.js";
+import { isValidFileId, prepareStorage, publicFilename } from "../src/storage.js";
 
-test("sanitizes traversal, control characters, and separators", () => {
-  const name = sanitizeFilename("../folder\\evil\r\nX-Evil: 1.txt");
-
-  assert.equal(name.includes("/"), false);
-  assert.equal(name.includes("\\"), false);
-  assert.equal(/[\r\n]/u.test(name), false);
-  assert.match(name, /evil/u);
-  assert.match(name, /\.txt$/u);
-});
-
-test("normalizes unicode and supplies a fallback filename", () => {
-  assert.equal(sanitizeFilename("cafe\u0301.txt"), "caf\u00e9.txt");
-  assert.equal(sanitizeFilename("../../"), "file");
+test("slugs separators, control characters, and unicode into a safe name", () => {
+  assert.match(publicFilename("../folder\\evil\r\nX-Evil: 1.txt"), /^folder-evil-x-evil-1-[a-f0-9]{8}\.txt$/u);
+  assert.match(publicFilename("Café Résumé.PDF"), /^cafe-resume-[a-f0-9]{8}\.pdf$/u);
+  assert.match(publicFilename("../../"), /^file-[a-f0-9]{8}$/u);
+  assert.match(publicFilename(".env"), /^env-[a-f0-9]{8}$/u);
 });
 
 test("bounds filename length without losing the extension", () => {
-  const name = sanitizeFilename(`${"a".repeat(400)}.webm`);
+  const name = publicFilename(`${"a".repeat(400)}.webm`);
 
-  assert.ok(Buffer.byteLength(name) <= 90);
-  assert.match(name, /\.webm$/u);
+  assert.ok(name.length <= 90);
+  assert.match(name, /-[a-f0-9]{8}\.webm$/u);
 });
 
 test("accepts only 128-bit lowercase hex ids", () => {

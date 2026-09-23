@@ -4,83 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
-    <meta name="description" content="A small private upload door for public files." />
+    <meta name="description" content="Upload a file, get a public link." />
     <title>files.lbgos.dev</title>
     <link rel="icon" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <div class="shell">
-      <header class="enter">
-        <a class="logo" href="/" aria-label="files.lbgos.dev home">files<span>.lbgos.dev</span></a>
+    <main>
+      <header>
+        <h1>files.lbgos.dev</h1>
+        <a href="https://lbgos.dev">lbgos.dev</a>
       </header>
 
-      <main>
-        <section class="hero">
-          <p class="eyebrow enter delay-1">private door / public files</p>
-          <h1 class="enter delay-2">Drop it.<br /><em>Ship it.</em></h1>
-          <p class="lede enter delay-3">
-            One quiet place for screenshots, recordings, logs, and the useful little artifacts
-            that never fit in a message.
-          </p>
-        </section>
+      <label class="token">
+        <span>token</span>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="paste upload token" />
+        <button id="toggle-token" type="button" aria-pressed="false">show</button>
+      </label>
 
-        <section class="uploader enter delay-4" aria-labelledby="upload-title">
-          <div class="panel-head">
-            <div>
-              <span class="index">01</span>
-              <h2 id="upload-title">unlock the door</h2>
-            </div>
-            <span class="privacy">files become public</span>
-          </div>
+      <button id="drop-zone" class="drop" type="button">
+        drop, paste or <u>choose</u> files <span>· links are public</span>
+      </button>
+      <input id="file-input" type="file" multiple hidden />
 
-          <label class="token-field">
-            <span>upload token</span>
-            <span class="token-input-wrap">
-              <input
-                id="token"
-                type="password"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="paste token"
-                aria-describedby="token-note"
-              />
-              <button id="toggle-token" type="button" aria-label="Show token">show</button>
-            </span>
-          </label>
-          <p id="token-note" class="microcopy">Kept in this page only. Never stored by the browser.</p>
-
-          <button id="drop-zone" class="drop-zone" type="button">
-            <span class="drop-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" /></svg>
-            </span>
-            <span class="drop-copy">
-              <b>drop files here</b>
-              <small>or click to browse</small>
-            </span>
-            <span class="drop-arrow" aria-hidden="true">↗</span>
-          </button>
-          <input id="file-input" type="file" multiple hidden />
-          <p id="announcement" class="sr-only" aria-live="polite"></p>
-        </section>
-
-        <section id="uploads-section" class="uploads" aria-labelledby="uploads-title" hidden>
-          <div class="panel-head">
-            <div>
-              <span class="index">02</span>
-              <h2 id="uploads-title">recent uploads</h2>
-            </div>
-            <button id="clear-complete" class="text-button" type="button">clear finished</button>
-          </div>
-          <ol id="upload-list" class="upload-list"></ol>
-        </section>
-      </main>
-
-      <footer>
-        <span>file-upload / built for things worth sharing</span>
-        <a href="https://lbgos.dev">lbgos.dev ↗</a>
-      </footer>
-    </div>
+      <ol id="upload-list" class="uploads" aria-live="polite"></ol>
+    </main>
   </body>
 </html>

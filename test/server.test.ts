@@ -8,15 +8,12 @@ import { createApp } from "../src/server.js";
 
 const TOKEN = "test-token-with-enough-entropy";
 
-async function fixture(options: { maxFileBytes?: number; publicBaseUrl?: string | undefined } = {}) {
+async function fixture(options: { maxFileBytes?: number } = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "file-upload-test-"));
   const app = await createApp({
     uploadToken: TOKEN,
     maxFileBytes: options.maxFileBytes ?? 1024 * 1024,
     dataDir,
-    publicBaseUrl: Object.hasOwn(options, "publicBaseUrl")
-      ? options.publicBaseUrl
-      : "https://files.lbgos.dev",
     host: "127.0.0.1",
     port: 0,
   });
@@ -32,7 +29,7 @@ async function upload(
   return app.inject({
     method: "PUT",
     url: `/${encodeURIComponent(filename)}`,
-    headers: { "x-upload-token": token, "content-type": "application/octet-stream" },
+    headers: { "x-upload-token": token, host: "files.lbgos.dev", "x-forwarded-proto": "https" },
     payload: body,
   });
 }
@@ -151,21 +148,14 @@ test("deletes with X-Upload-Token and returns 404 on repeat", async (t) => {
   assert.equal((await app.inject({ method: "GET", url: url.pathname })).statusCode, 404);
 });
 
-test("uses proxy headers when explicit public base URL is absent", async (t) => {
-  const { app } = await fixture({ publicBaseUrl: undefined });
+test("rejects path traversal in the public filename", async (t) => {
+  const { app } = await fixture();
   t.after(() => app.close());
-  const response = await app.inject({
-    method: "PUT",
-    url: "/proxy.txt",
-    headers: {
-      "x-upload-token": TOKEN,
-      "content-type": "application/octet-stream",
-      host: "files.lbgos.dev",
-      "x-forwarded-proto": "https",
-    },
-    payload: "ok",
-  });
-  assert.match(response.body, /^https:\/\/files\.lbgos\.dev\/f\//u);
+  const created = await upload(app, "secret.txt", Buffer.from("x"));
+  const id = new URL(created.body).pathname.split("/")[2];
+
+  const traversal = await app.inject({ method: "GET", url: `/f/${id}/..%2F..%2Ffiles` });
+  assert.equal(traversal.statusCode, 404);
 });
 
 test("rejects malformed filename encoding and serves health and UI", async (t) => {

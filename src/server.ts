@@ -1,4 +1,12 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+/**
+ * HTTP API:
+ *   PUT    /<filename>        upload raw bytes (X-Upload-Token), responds with the public URL
+ *   GET    /f/<id>/<name>     public download, supports Range and HEAD
+ *   DELETE /api/files/<id>    delete an upload (X-Upload-Token)
+ *   GET    /healthz           liveness
+ *   GET    /                  upload page
+ */
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,57 +16,45 @@ import { hasValidToken } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import {
   deleteFile,
-  discardUpload,
   findFile,
   openFileStream,
   prepareStorage,
   publishUpload,
   stageUpload,
-  type StagedUpload,
   UploadTooLargeError,
 } from "./storage.js";
 
-const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-const publicDirectory = path.resolve(moduleDirectory, "../public");
+const publicDirectory = fileURLToPath(new URL("../public", import.meta.url));
 
-const unauthorized = { error: { code: "UNAUTHORIZED", message: "Valid bearer token required" } };
+const staticAssets = {
+  "/": ["index.html", "text/html; charset=utf-8"],
+  "/styles.css": ["styles.css", "text/css; charset=utf-8"],
+  "/app.js": ["app.js", "text/javascript; charset=utf-8"],
+  "/favicon.svg": ["favicon.svg", "image/svg+xml"],
+} as const;
 
-class InvalidUploadError extends Error {}
+const PAGE_CSP =
+  "default-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+const FILE_CSP =
+  "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob:";
+
+function apiError(reply: FastifyReply, status: number, code: string, message: string) {
+  return reply.code(status).send({ error: { code, message } });
+}
 
 function authenticate(request: FastifyRequest, reply: FastifyReply, token: string): boolean {
   const supplied = request.headers["x-upload-token"];
   if (hasValidToken(Array.isArray(supplied) ? supplied[0] : supplied, token)) return true;
-  void reply.code(401).send(unauthorized);
+  void apiError(reply, 401, "UNAUTHORIZED", "Valid X-Upload-Token required");
   return false;
 }
 
-function baseUrl(request: FastifyRequest, configured: string | undefined): string {
-  if (configured) return configured;
-  return `${request.protocol}://${request.hostname}`;
-}
-
 function contentDisposition(filename: string): string {
-  const fallback = filename.replace(/[^\x20-\x7e]/gu, "_").replace(/["\\]/gu, "_");
-  const encoded = encodeURIComponent(filename).replace(/['()]/gu, (character) =>
-    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  // Stored names are ASCII slugs, so no RFC 5987 encoding is needed.
+  return `inline; filename="${filename}"`;
 }
 
-function setFileHeaders(reply: FastifyReply, name: string): void {
-  reply.headers({
-    "accept-ranges": "bytes",
-    "cache-control": "public, max-age=31536000, immutable",
-    "content-disposition": contentDisposition(name),
-    "content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob:",
-    "cross-origin-resource-policy": "cross-origin",
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-  });
-}
-
-function parseRange(value: string | undefined, size: number): { start: number; end: number } | undefined {
-  if (!value) return undefined;
+function parseRange(value: string, size: number): { start: number; end: number } | undefined {
   const match = /^bytes=(\d*)-(\d*)$/u.exec(value);
   if (!match || size === 0) return undefined;
   const [, rawStart = "", rawEnd = ""] = match;
@@ -72,42 +68,28 @@ function parseRange(value: string | undefined, size: number): { start: number; e
 
   const start = Number(rawStart);
   const end = rawEnd === "" ? size - 1 : Number(rawEnd);
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= size) {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || start >= size) {
     return undefined;
   }
   return { start, end: Math.min(end, size - 1) };
 }
 
-async function staticAsset(reply: FastifyReply, filename: string, type: string): Promise<void> {
-  const body = await readFile(path.join(publicDirectory, filename));
-  reply
-    .header("cache-control", filename === "index.html" ? "no-cache" : "public, max-age=3600")
-    .type(type)
-    .send(body);
-}
-
-export async function createApp(
-  config: AppConfig,
-  options: { logger?: boolean } = {},
-): Promise<FastifyInstance> {
+export async function createApp(config: AppConfig, options: { logger?: boolean } = {}) {
   await prepareStorage(config.dataDir);
-  const app = Fastify({
-    logger: options.logger ?? false,
-    trustProxy: true,
-    bodyLimit: config.maxFileBytes + 1024 * 1024,
-  });
+  // trustProxy lets public URLs follow the proxy's Host and X-Forwarded-Proto, so no origin is configured.
+  const app = Fastify({ logger: options.logger ?? false, trustProxy: true });
 
-  app.addContentTypeParser("*", (_request, payload, done) => done(null, payload));
+  // Leave every request body unread; the upload route streams `request.raw` straight to disk.
+  app.addContentTypeParser("*", (_request, _payload, done) => done(null));
 
   app.addHook("onSend", async (request, reply) => {
-    if (!request.url.startsWith("/f/")) {
-      reply.headers({
-        "content-security-policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-        "referrer-policy": "no-referrer",
-        "x-content-type-options": "nosniff",
-        "x-frame-options": "DENY",
-      });
-    }
+    if (request.url.startsWith("/f/")) return;
+    reply.headers({
+      "content-security-policy": PAGE_CSP,
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+    });
   });
 
   app.get("/healthz", async () => ({ ok: true }));
@@ -115,52 +97,39 @@ export async function createApp(
   app.put<{ Params: { "*": string } }>("/*", async (request, reply) => {
     if (!authenticate(request, reply, config.uploadToken)) return;
 
-    let staged: StagedUpload | undefined;
+    const encodedName = request.params["*"];
+    if (!encodedName || encodedName.includes("/")) {
+      return apiError(reply, 400, "INVALID_UPLOAD", "Upload to /<filename>");
+    }
+    let filename: string;
     try {
-      const encodedFilename = request.params["*"];
-      if (!encodedFilename || encodedFilename.includes("/")) {
-        throw new InvalidUploadError("A filename path is required");
-      }
-      let filename: string;
-      try {
-        filename = decodeURIComponent(encodedFilename);
-      } catch {
-        throw new InvalidUploadError("Filename is not valid URL encoding");
-      }
-      const stream = request.body;
-      if (!stream || typeof (stream as NodeJS.ReadableStream).pipe !== "function") {
-        throw new InvalidUploadError("A file body is required");
-      }
-      staged = await stageUpload(
-        config.dataDir,
-        filename,
-        stream as NodeJS.ReadableStream as import("node:stream").Readable,
-        config.maxFileBytes,
-      );
+      filename = decodeURIComponent(encodedName);
+    } catch {
+      return apiError(reply, 400, "INVALID_UPLOAD", "Filename is not valid URL encoding");
+    }
+
+    try {
+      const staged = await stageUpload(config.dataDir, filename, request.raw, config.maxFileBytes);
       await publishUpload(config.dataDir, staged);
-      const url = `${baseUrl(request, config.publicBaseUrl)}/f/${staged.id}/${encodeURIComponent(staged.name)}`;
+      const url = `${request.protocol}://${request.host}/f/${staged.id}/${staged.name}`;
       return reply.code(201).type("text/plain; charset=utf-8").send(url);
     } catch (error) {
-      await discardUpload(staged);
       if (error instanceof UploadTooLargeError) {
-        return reply.code(413).send({ error: { code: "FILE_TOO_LARGE", message: "File exceeds the upload limit" } });
-      }
-      if (error instanceof InvalidUploadError) {
-        return reply.code(400).send({ error: { code: "INVALID_UPLOAD", message: error.message } });
+        return apiError(reply, 413, "FILE_TOO_LARGE", "File exceeds the upload limit");
       }
       if ((error as NodeJS.ErrnoException).code === "ENOSPC") {
         request.log.error({ err: error }, "upload storage is full");
-        return reply.code(507).send({ error: { code: "INSUFFICIENT_STORAGE", message: "Upload storage is full" } });
+        return apiError(reply, 507, "INSUFFICIENT_STORAGE", "Upload storage is full");
       }
       request.log.error({ err: error }, "upload failed");
-      return reply.code(500).send({ error: { code: "UPLOAD_FAILED", message: "Upload failed" } });
+      return apiError(reply, 500, "UPLOAD_FAILED", "Upload failed");
     }
   });
 
   app.delete<{ Params: { id: string } }>("/api/files/:id", async (request, reply) => {
     if (!authenticate(request, reply, config.uploadToken)) return;
     if (!(await deleteFile(config.dataDir, request.params.id))) {
-      return reply.code(404).send({ error: { code: "NOT_FOUND", message: "File not found" } });
+      return apiError(reply, 404, "NOT_FOUND", "File not found");
     }
     return { deleted: true };
   });
@@ -168,42 +137,43 @@ export async function createApp(
   const serveFile = async (
     request: FastifyRequest<{ Params: { id: string; name: string } }>,
     reply: FastifyReply,
-    headOnly: boolean,
   ) => {
     const file = await findFile(config.dataDir, request.params.id, request.params.name);
-    if (!file) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "File not found" } });
+    if (!file) return apiError(reply, 404, "NOT_FOUND", "File not found");
 
-    setFileHeaders(reply, file.name);
-    reply.type(mimeType(file.name) || "application/octet-stream");
+    reply.type(mimeType(file.name) || "application/octet-stream").headers({
+      "accept-ranges": "bytes",
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-disposition": contentDisposition(file.name),
+      "content-security-policy": FILE_CSP,
+      "cross-origin-resource-policy": "cross-origin",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+    });
+
     const requestedRange = request.headers.range;
-    const range = parseRange(requestedRange, file.size);
+    const range = requestedRange ? parseRange(requestedRange, file.size) : undefined;
     if (requestedRange && !range) {
       return reply.header("content-range", `bytes */${file.size}`).code(416).send();
     }
     if (range) {
-      reply
-        .code(206)
-        .header("content-range", `bytes ${range.start}-${range.end}/${file.size}`)
-        .header("content-length", String(range.end - range.start + 1));
-      return headOnly ? reply.send() : reply.send(openFileStream(file, range.start, range.end));
+      reply.code(206).header("content-range", `bytes ${range.start}-${range.end}/${file.size}`);
     }
-    reply.header("content-length", String(file.size));
-    return headOnly ? reply.send() : reply.send(openFileStream(file));
+    reply.header("content-length", String(range ? range.end - range.start + 1 : file.size));
+    return request.method === "HEAD" ? reply.send() : reply.send(openFileStream(file, range));
   };
 
-  app.get<{ Params: { id: string; name: string } }>(
-    "/f/:id/:name",
-    { exposeHeadRoute: false },
-    (request, reply) => serveFile(request, reply, false),
-  );
-  app.head<{ Params: { id: string; name: string } }>("/f/:id/:name", (request, reply) =>
-    serveFile(request, reply, true),
-  );
+  app.get("/f/:id/:name", { exposeHeadRoute: false }, serveFile);
+  app.head("/f/:id/:name", serveFile);
 
-  app.get("/", (_request, reply) => staticAsset(reply, "index.html", "text/html; charset=utf-8"));
-  app.get("/styles.css", (_request, reply) => staticAsset(reply, "styles.css", "text/css; charset=utf-8"));
-  app.get("/app.js", (_request, reply) => staticAsset(reply, "app.js", "text/javascript; charset=utf-8"));
-  app.get("/favicon.svg", (_request, reply) => staticAsset(reply, "favicon.svg", "image/svg+xml"));
+  for (const [route, [filename, type]] of Object.entries(staticAssets)) {
+    app.get(route, async (_request, reply) =>
+      reply
+        .header("cache-control", filename === "index.html" ? "no-cache" : "public, max-age=3600")
+        .type(type)
+        .send(await readFile(path.join(publicDirectory, filename))),
+    );
+  }
 
   return app;
 }
