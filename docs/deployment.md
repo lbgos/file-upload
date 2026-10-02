@@ -24,6 +24,7 @@ NPM proxy host:
 
 - Forward to `http://<container-or-host>:3000`.
 - Enable Force SSL with a certificate for the domain.
+- Leave Cache Assets off. It caches `/f/*.png`, `.svg` and similar for 30 minutes, ignores the app's `Cache-Control` and keeps serving a deleted file instead of the 404.
 - Custom Nginx config when uploads are large or slow:
 
 ```nginx
