@@ -1,24 +1,9 @@
-// Project page: copy buttons for snippets and the owner sign-in, which trades the token for a session cookie.
-for (const button of document.querySelectorAll(".copy")) {
-  button.addEventListener("click", async () => {
-    const code = button.parentElement.querySelector("code").textContent;
-    try {
-      await navigator.clipboard.writeText(code);
-      button.textContent = "copied";
-    } catch {
-      button.textContent = "copy failed";
-    }
-    setTimeout(() => { button.textContent = "copy"; }, 1200);
-  });
-}
-
+// Owner sign-in: trades the token for the HttpOnly session cookie, then reloads into the upload page.
 const form = document.querySelector("#sign-in");
 const tokenInput = document.querySelector("#token");
-const status = document.querySelector("#sign-in-status");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  status.textContent = "";
   const response = await fetch("/api/session", {
     method: "POST",
     headers: { "X-Upload-Token": tokenInput.value.trim() },
@@ -29,5 +14,8 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   tokenInput.value = "";
-  status.textContent = response?.status === 401 ? "Wrong token" : "Network error, try again";
+  tokenInput.placeholder = response?.status === 401 ? "wrong token" : "network error";
+  form.classList.add("failed");
 });
+
+tokenInput.addEventListener("input", () => form.classList.remove("failed"));

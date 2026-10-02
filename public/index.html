@@ -4,92 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
-    <meta name="description" content="Self-hosted file links for coding agents. Upload with a token, get a public URL for pull requests." />
+    <meta name="description" content="file links for my agents." />
     <title>files.lbgos.dev</title>
     <link rel="icon" href="/favicon.svg" />
+    <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/geist-mono.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/landing.js" defer></script>
   </head>
   <body>
-    <main class="landing">
+    <div class="site-shell">
       <header>
-        <h1>files.lbgos.dev</h1>
-        <nav>
-          <a href="https://github.com/lbgos/file-upload">github</a>
-          <a href="https://lbgos.dev">lbgos.dev</a>
-        </nav>
+        <a class="logo" href="/">files.lbgos<span>.dev</span></a>
+        <nav><a href="https://lbgos.dev">lbgos.dev</a></nav>
       </header>
-
-      <section class="hero">
-        <h2>File links for coding agents</h2>
-        <p>
-          An agent uploads a screenshot, recording or build with one request and gets back a public link it can put in a
-          pull request. Uploading here needs my token. The code is open, so run your own.
-        </p>
-        <pre class="exchange"><code><span class="prompt">$</span> curl -T login-flow.webm -H "X-Upload-Token: $FILE_HOST_TOKEN" \
-    https://files.lbgos.dev/login-flow.webm</code></pre>
-        <p class="result" aria-label="Example response">https://files.lbgos.dev<wbr />/f/1e452850091a42cab2b47fe36691651b<wbr />/login-flow-a1b2c3d4.webm</p>
-      </section>
-
-      <section>
-        <h3>Run your own</h3>
-        <p>One container, Node 24, no database. Put it behind a TLS proxy that forwards <code>Host</code>.</p>
-        <div class="snippet">
-          <pre><code>git clone https://github.com/lbgos/file-upload && cd file-upload
-cp .env.example .env   # FILE_HOST_TOKEN=$(openssl rand -hex 32)
-docker compose up -d --build</code></pre>
-          <button type="button" class="copy">copy</button>
+      <main class="home-hero">
+        <h1 class="enter">files.</h1>
+        <p class="enter delay-1">file links for my agents. uploads are mine, the code is open.</p>
+        <div class="home-links enter delay-2">
+          <a href="https://github.com/lbgos/file-upload"><span>source</span><b>↗</b></a>
+          <a href="https://github.com/lbgos/file-upload/tree/main/skill/file-upload"><span>agent skill</span><b>↗</b></a>
+          <form id="sign-in">
+            <input id="token" type="password" aria-label="upload token" autocomplete="current-password" spellcheck="false" placeholder="sign in" required />
+            <button type="submit" aria-label="sign in"><b>↗</b></button>
+          </form>
         </div>
-      </section>
-
-      <section>
-        <h3>Install the agent skill</h3>
-        <p>
-          Works with Claude Code and Codex (<code>~/.codex/skills</code>). The skill uploads files, embeds images in PRs and
-          refuses to upload secrets.
-        </p>
-        <div class="snippet">
-          <pre><code>mkdir -p ~/.claude/skills/file-upload
-curl -fsSL https://raw.githubusercontent.com/lbgos/file-upload/main/skill/file-upload/SKILL.md \
-  -o ~/.claude/skills/file-upload/SKILL.md</code></pre>
-          <button type="button" class="copy">copy</button>
-        </div>
-        <p>Then point it at your host:</p>
-        <div class="snippet">
-          <pre><code>cat > ~/.config/file-upload.env &lt;&lt;'EOF'
-export FILE_HOST_URL='https://files.example.com'
-export FILE_HOST_TOKEN='&lt;your token&gt;'
-EOF
-chmod 600 ~/.config/file-upload.env</code></pre>
-          <button type="button" class="copy">copy</button>
-        </div>
-      </section>
-
-      <section>
-        <h3>Behavior</h3>
-        <dl class="facts">
-          <dt>Links</dt>
-          <dd>Unlisted, with a 128-bit random id. Anyone holding the link can open it.</dd>
-          <dt>Limit</dt>
-          <dd>90 MiB per file by default, below the Cloudflare 100 MB body cap.</dd>
-          <dt>Video</dt>
-          <dd>Range requests, so players can seek.</dd>
-          <dt>Safety</dt>
-          <dd>Files are served with a sandbox CSP and <code>nosniff</code>, so an uploaded HTML or SVG file cannot run script.</dd>
-          <dt>Delete</dt>
-          <dd><code>DELETE /api/files/&lt;id&gt;</code> with the token.</dd>
-        </dl>
-      </section>
-
-      <footer>
-        <form id="sign-in" class="sign-in">
-          <label for="token">Owner</label>
-          <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="upload token" required />
-          <button type="submit">Sign in</button>
-          <output id="sign-in-status" aria-live="polite"></output>
-        </form>
-        <span>MIT</span>
-      </footer>
-    </main>
+      </main>
+    </div>
   </body>
 </html>

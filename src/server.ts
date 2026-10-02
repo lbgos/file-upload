@@ -35,6 +35,8 @@ const staticAssets = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/landing.js": ["landing.js", "text/javascript; charset=utf-8"],
   "/favicon.svg": ["favicon.svg", "image/svg+xml"],
+  "/fonts/geist.woff2": ["fonts/geist.woff2", "font/woff2"],
+  "/fonts/geist-mono.woff2": ["fonts/geist-mono.woff2", "font/woff2"],
 } as const;
 
 const PAGE_CSP =

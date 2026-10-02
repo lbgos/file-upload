@@ -7,25 +7,21 @@
     <meta name="robots" content="noindex" />
     <title>files.lbgos.dev</title>
     <link rel="icon" href="/favicon.svg" />
+    <link rel="preload" href="/fonts/geist-mono.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <main>
+    <div class="site-shell">
       <header>
-        <h1>files.lbgos.dev</h1>
-        <nav>
-          <a href="https://github.com/lbgos/file-upload">github</a>
-          <button id="sign-out" type="button">sign out</button>
-        </nav>
+        <a class="logo" href="/">files.lbgos<span>.dev</span></a>
+        <nav><button id="sign-out" type="button">sign out</button></nav>
       </header>
-
-      <button id="drop-zone" class="drop" type="button">
-        Drop, paste or <u>choose</u> files. Links are public.
-      </button>
-      <input id="file-input" type="file" multiple hidden />
-
-      <ol id="upload-list" class="uploads" aria-live="polite"></ol>
-    </main>
+      <main>
+        <button id="drop-zone" class="drop" type="button"><span>drop, paste or choose files</span><b>↑</b></button>
+        <input id="file-input" type="file" multiple hidden />
+        <ol id="upload-list" class="uploads" aria-live="polite"></ol>
+      </main>
+    </div>
   </body>
 </html>

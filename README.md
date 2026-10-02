@@ -11,7 +11,7 @@ cp .env.example .env    # set FILE_HOST_TOKEN, e.g. from `openssl rand -hex 32`
 docker compose up -d --build
 ```
 
-Open `http://localhost:3000`. Visitors see the project page. Sign in with the token at the bottom of it to get the upload page, then drop, paste or choose files. Sign-in sets an HttpOnly session cookie derived from the token for 30 days; rotating the token signs every browser out.
+Open `http://localhost:3000`. Visitors see a short project page. Type the token into its `sign in` row to get the upload page, then drop, paste or choose files. Sign-in sets an HttpOnly session cookie derived from the token for 30 days; rotating the token signs every browser out.
 
 For production, put it behind a reverse proxy. See [deployment](docs/deployment.md).
 
