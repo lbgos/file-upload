@@ -11,6 +11,7 @@
  * Upload and delete accept either the X-Upload-Token header (CLI, agents) or the session cookie (browser).
  */
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,19 @@ const PAGE_CSP =
   "default-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const FILE_CSP =
   "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob:";
+
+/**
+ * Loads both HTML pages with `__ASSET_VERSION__` replaced by a hash of the static assets.
+ * Proxies in front (NPM "Cache Assets", Cloudflare) cache css/js by URL and ignore our headers, so URLs change per release.
+ */
+async function loadPages() {
+  const hash = createHash("sha256");
+  for (const [filename] of Object.values(staticAssets)) hash.update(await readFile(path.join(publicDirectory, filename)));
+  const version = hash.digest("hex").slice(0, 10);
+  const page = async (filename: string) =>
+    (await readFile(path.join(publicDirectory, filename), "utf8")).replaceAll("__ASSET_VERSION__", version);
+  return { landing: await page("index.html"), upload: await page("upload.html") };
+}
 
 function apiError(reply: FastifyReply, status: number, code: string, message: string) {
   return reply.code(status).send({ error: { code, message } });
@@ -88,6 +102,7 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
   // trustProxy lets public URLs follow the proxy's Host and X-Forwarded-Proto, so no origin is configured.
   const app = Fastify({ logger: options.logger ?? false, trustProxy: true });
 
+  const pages = await loadPages();
   const session = sessionValue(config.uploadToken);
   const isOwner = (request: FastifyRequest) =>
     hasValidToken(headerToken(request), config.uploadToken) ||
@@ -118,7 +133,7 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
       .header("cache-control", "private, no-store")
       .header("vary", "cookie")
       .type("text/html; charset=utf-8")
-      .send(await readFile(path.join(publicDirectory, isOwner(request) ? "upload.html" : "index.html"))),
+      .send(isOwner(request) ? pages.upload : pages.landing),
   );
 
   // Only the header token signs in; an existing cookie cannot mint a new one.
