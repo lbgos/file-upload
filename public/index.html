@@ -4,31 +4,92 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
-    <meta name="description" content="Upload a file, get a public link." />
+    <meta name="description" content="Self-hosted file links for coding agents. Upload with a token, get a public URL for pull requests." />
     <title>files.lbgos.dev</title>
     <link rel="icon" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
-    <script src="/app.js" defer></script>
+    <script src="/landing.js" defer></script>
   </head>
   <body>
-    <main>
+    <main class="landing">
       <header>
         <h1>files.lbgos.dev</h1>
-        <a href="https://lbgos.dev">lbgos.dev</a>
+        <nav>
+          <a href="https://github.com/lbgos/file-upload">github</a>
+          <a href="https://lbgos.dev">lbgos.dev</a>
+        </nav>
       </header>
 
-      <label class="token">
-        <span>token</span>
-        <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="paste upload token" />
-        <button id="toggle-token" type="button" aria-pressed="false">show</button>
-      </label>
+      <section class="hero">
+        <h2>File links for coding agents</h2>
+        <p>
+          An agent uploads a screenshot, recording or build with one request and gets back a public link it can put in a
+          pull request. Uploading here needs my token. The code is open, so run your own.
+        </p>
+        <pre class="exchange"><code><span class="prompt">$</span> curl -T login-flow.webm -H "X-Upload-Token: $FILE_HOST_TOKEN" \
+    https://files.lbgos.dev/login-flow.webm</code></pre>
+        <p class="result" aria-label="Example response">https://files.lbgos.dev<wbr />/f/1e452850091a42cab2b47fe36691651b<wbr />/login-flow-a1b2c3d4.webm</p>
+      </section>
 
-      <button id="drop-zone" class="drop" type="button">
-        drop, paste or <u>choose</u> files <span>· links are public</span>
-      </button>
-      <input id="file-input" type="file" multiple hidden />
+      <section>
+        <h3>Run your own</h3>
+        <p>One container, Node 24, no database. Put it behind a TLS proxy that forwards <code>Host</code>.</p>
+        <div class="snippet">
+          <pre><code>git clone https://github.com/lbgos/file-upload && cd file-upload
+cp .env.example .env   # FILE_HOST_TOKEN=$(openssl rand -hex 32)
+docker compose up -d --build</code></pre>
+          <button type="button" class="copy">copy</button>
+        </div>
+      </section>
 
-      <ol id="upload-list" class="uploads" aria-live="polite"></ol>
+      <section>
+        <h3>Install the agent skill</h3>
+        <p>
+          Works with Claude Code and Codex (<code>~/.codex/skills</code>). The skill uploads files, embeds images in PRs and
+          refuses to upload secrets.
+        </p>
+        <div class="snippet">
+          <pre><code>mkdir -p ~/.claude/skills/file-upload
+curl -fsSL https://raw.githubusercontent.com/lbgos/file-upload/main/skill/file-upload/SKILL.md \
+  -o ~/.claude/skills/file-upload/SKILL.md</code></pre>
+          <button type="button" class="copy">copy</button>
+        </div>
+        <p>Then point it at your host:</p>
+        <div class="snippet">
+          <pre><code>cat > ~/.config/file-upload.env &lt;&lt;'EOF'
+export FILE_HOST_URL='https://files.example.com'
+export FILE_HOST_TOKEN='&lt;your token&gt;'
+EOF
+chmod 600 ~/.config/file-upload.env</code></pre>
+          <button type="button" class="copy">copy</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Behavior</h3>
+        <dl class="facts">
+          <dt>Links</dt>
+          <dd>Unlisted, with a 128-bit random id. Anyone holding the link can open it.</dd>
+          <dt>Limit</dt>
+          <dd>90 MiB per file by default, below the Cloudflare 100 MB body cap.</dd>
+          <dt>Video</dt>
+          <dd>Range requests, so players can seek.</dd>
+          <dt>Safety</dt>
+          <dd>Files are served with a sandbox CSP and <code>nosniff</code>, so an uploaded HTML or SVG file cannot run script.</dd>
+          <dt>Delete</dt>
+          <dd><code>DELETE /api/files/&lt;id&gt;</code> with the token.</dd>
+        </dl>
+      </section>
+
+      <footer>
+        <form id="sign-in" class="sign-in">
+          <label for="token">Owner</label>
+          <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="upload token" required />
+          <button type="submit">Sign in</button>
+          <output id="sign-in-status" aria-live="polite"></output>
+        </form>
+        <span>MIT</span>
+      </footer>
     </main>
   </body>
 </html>

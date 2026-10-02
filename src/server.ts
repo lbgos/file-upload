@@ -3,8 +3,12 @@
  *   PUT    /<filename>        upload raw bytes (X-Upload-Token), responds with the public URL
  *   GET    /f/<id>/<name>     public download, supports Range and HEAD
  *   DELETE /api/files/<id>    delete an upload (X-Upload-Token)
+ *   POST   /api/session       exchange X-Upload-Token for a browser session cookie
+ *   DELETE /api/session       sign the browser out
  *   GET    /healthz           liveness
- *   GET    /                  upload page
+ *   GET    /                  upload page for the owner, project page for everyone else
+ *
+ * Upload and delete accept either the X-Upload-Token header (CLI, agents) or the session cookie (browser).
  */
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
@@ -12,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { lookup as mimeType } from "mime-types";
 
-import { hasValidToken } from "./auth.js";
+import { hasValidToken, readCookie, SESSION_COOKIE, SESSION_MAX_AGE_SECONDS, sessionValue } from "./auth.js";
 import type { AppConfig } from "./config.js";
 import {
   deleteFile,
@@ -27,9 +31,9 @@ import {
 const publicDirectory = fileURLToPath(new URL("../public", import.meta.url));
 
 const staticAssets = {
-  "/": ["index.html", "text/html; charset=utf-8"],
   "/styles.css": ["styles.css", "text/css; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
+  "/landing.js": ["landing.js", "text/javascript; charset=utf-8"],
   "/favicon.svg": ["favicon.svg", "image/svg+xml"],
 } as const;
 
@@ -42,11 +46,14 @@ function apiError(reply: FastifyReply, status: number, code: string, message: st
   return reply.code(status).send({ error: { code, message } });
 }
 
-function authenticate(request: FastifyRequest, reply: FastifyReply, token: string): boolean {
+function headerToken(request: FastifyRequest): string | undefined {
   const supplied = request.headers["x-upload-token"];
-  if (hasValidToken(Array.isArray(supplied) ? supplied[0] : supplied, token)) return true;
-  void apiError(reply, 401, "UNAUTHORIZED", "Valid X-Upload-Token required");
-  return false;
+  return Array.isArray(supplied) ? supplied[0] : supplied;
+}
+
+function sessionCookie(request: FastifyRequest, value: string, maxAge: number): string {
+  const secure = request.protocol === "https" ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure}`;
 }
 
 function contentDisposition(filename: string): string {
@@ -79,6 +86,16 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
   // trustProxy lets public URLs follow the proxy's Host and X-Forwarded-Proto, so no origin is configured.
   const app = Fastify({ logger: options.logger ?? false, trustProxy: true });
 
+  const session = sessionValue(config.uploadToken);
+  const isOwner = (request: FastifyRequest) =>
+    hasValidToken(headerToken(request), config.uploadToken) ||
+    hasValidToken(readCookie(request.headers.cookie, SESSION_COOKIE), session);
+  const authenticate = (request: FastifyRequest, reply: FastifyReply) => {
+    if (isOwner(request)) return true;
+    void apiError(reply, 401, "UNAUTHORIZED", "Valid X-Upload-Token required");
+    return false;
+  };
+
   // Leave every request body unread; the upload route streams `request.raw` straight to disk.
   app.addContentTypeParser("*", (_request, _payload, done) => done(null));
 
@@ -94,8 +111,28 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
 
   app.get("/healthz", async () => ({ ok: true }));
 
+  app.get("/", async (request, reply) =>
+    reply
+      .header("cache-control", "private, no-store")
+      .header("vary", "cookie")
+      .type("text/html; charset=utf-8")
+      .send(await readFile(path.join(publicDirectory, isOwner(request) ? "upload.html" : "index.html"))),
+  );
+
+  // Only the header token signs in; an existing cookie cannot mint a new one.
+  app.post("/api/session", async (request, reply) => {
+    if (!hasValidToken(headerToken(request), config.uploadToken)) {
+      return apiError(reply, 401, "UNAUTHORIZED", "Valid X-Upload-Token required");
+    }
+    return reply.header("set-cookie", sessionCookie(request, session, SESSION_MAX_AGE_SECONDS)).code(204).send();
+  });
+
+  app.delete("/api/session", async (request, reply) =>
+    reply.header("set-cookie", sessionCookie(request, "", 0)).code(204).send(),
+  );
+
   app.put<{ Params: { "*": string } }>("/*", async (request, reply) => {
-    if (!authenticate(request, reply, config.uploadToken)) return;
+    if (!authenticate(request, reply)) return;
 
     const encodedName = request.params["*"];
     if (!encodedName || encodedName.includes("/")) {
@@ -127,7 +164,7 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
   });
 
   app.delete<{ Params: { id: string } }>("/api/files/:id", async (request, reply) => {
-    if (!authenticate(request, reply, config.uploadToken)) return;
+    if (!authenticate(request, reply)) return;
     if (!(await deleteFile(config.dataDir, request.params.id))) {
       return apiError(reply, 404, "NOT_FOUND", "File not found");
     }
@@ -143,7 +180,8 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
 
     reply.type(mimeType(file.name) || "application/octet-stream").headers({
       "accept-ranges": "bytes",
-      "cache-control": "public, max-age=31536000, immutable",
+      // Short TTL so a deleted file drops out of the Cloudflare edge within minutes.
+      "cache-control": "public, max-age=300",
       "content-disposition": contentDisposition(file.name),
       "content-security-policy": FILE_CSP,
       "cross-origin-resource-policy": "cross-origin",
@@ -169,7 +207,7 @@ export async function createApp(config: AppConfig, options: { logger?: boolean }
   for (const [route, [filename, type]] of Object.entries(staticAssets)) {
     app.get(route, async (_request, reply) =>
       reply
-        .header("cache-control", filename === "index.html" ? "no-cache" : "public, max-age=3600")
+        .header("cache-control", "no-cache")
         .type(type)
         .send(await readFile(path.join(publicDirectory, filename))),
     );

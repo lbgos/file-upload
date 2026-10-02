@@ -1,6 +1,5 @@
-// Upload page. The token lives only in the input; nothing is persisted by the browser.
-const tokenInput = document.querySelector("#token");
-const toggleToken = document.querySelector("#toggle-token");
+// Owner upload page. Requests authenticate with the HttpOnly session cookie set by POST /api/session.
+const signOut = document.querySelector("#sign-out");
 const dropZone = document.querySelector("#drop-zone");
 const fileInput = document.querySelector("#file-input");
 const uploadList = document.querySelector("#upload-list");
@@ -11,11 +10,9 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-toggleToken.addEventListener("click", () => {
-  const reveal = tokenInput.type === "password";
-  tokenInput.type = reveal ? "text" : "password";
-  toggleToken.textContent = reveal ? "hide" : "show";
-  toggleToken.setAttribute("aria-pressed", String(reveal));
+signOut.addEventListener("click", async () => {
+  await fetch("/api/session", { method: "DELETE" }).catch(() => undefined);
+  location.reload();
 });
 
 dropZone.addEventListener("click", () => fileInput.click());
@@ -42,19 +39,10 @@ document.addEventListener("paste", (event) => {
 });
 
 function queueFiles(fileList) {
-  if (!fileList.length) return;
-  const token = tokenInput.value.trim();
-  if (!token) {
-    tokenInput.focus();
-    tokenInput.setCustomValidity("Upload token required");
-    tokenInput.reportValidity();
-    tokenInput.addEventListener("input", () => tokenInput.setCustomValidity(""), { once: true });
-    return;
-  }
-  for (const file of fileList) uploadFile(file, token);
+  for (const file of fileList) uploadFile(file);
 }
 
-function uploadFile(file, token) {
+function uploadFile(file) {
   const name = el("span", { className: "name", textContent: file.name, title: file.name });
   const status = el("span", { className: "status", textContent: "0%" });
   const actions = el("span", { className: "actions" });
@@ -69,7 +57,6 @@ function uploadFile(file, token) {
 
   const request = new XMLHttpRequest();
   request.open("PUT", `/${encodeURIComponent(file.name)}`);
-  request.setRequestHeader("X-Upload-Token", token);
   request.upload.addEventListener("progress", (event) => {
     if (!event.lengthComputable) return;
     const percent = Math.round((event.loaded / event.total) * 100);
@@ -78,6 +65,10 @@ function uploadFile(file, token) {
   });
   request.addEventListener("error", () => fail("network error"));
   request.addEventListener("load", () => {
+    if (request.status === 401) {
+      fail("signed out");
+      return;
+    }
     if (request.status !== 201) {
       let message = `error ${request.status}`;
       try { message = JSON.parse(request.responseText).error.message; } catch {}
@@ -90,7 +81,7 @@ function uploadFile(file, token) {
     name.replaceChildren(el("a", { href: url, target: "_blank", rel: "noopener noreferrer", textContent: publicName }));
     name.title = url;
     status.textContent = "ready";
-    actions.append(copyButton(url), deleteButton(id, token, row, status));
+    actions.append(copyButton(url), deleteButton(id, row, status));
   });
   request.send(file);
 }
@@ -109,14 +100,11 @@ function copyButton(url) {
   return button;
 }
 
-function deleteButton(id, token, row, status) {
+function deleteButton(id, row, status) {
   const button = el("button", { type: "button", textContent: "delete" });
   button.addEventListener("click", async () => {
     button.disabled = true;
-    const response = await fetch(`/api/files/${id}`, {
-      method: "DELETE",
-      headers: { "X-Upload-Token": token },
-    }).catch(() => undefined);
+    const response = await fetch(`/api/files/${id}`, { method: "DELETE" }).catch(() => undefined);
     if (response?.ok) {
       row.remove();
       return;

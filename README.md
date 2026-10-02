@@ -2,7 +2,7 @@
 
 Self-hosted public file links. Upload with a private token and get back an unlisted URL anyone can open.
 
-![upload page](docs/ui-uploaded.png)
+![project page](docs/ui-desktop.png)
 
 ## Run
 
@@ -11,7 +11,7 @@ cp .env.example .env    # set FILE_HOST_TOKEN, e.g. from `openssl rand -hex 32`
 docker compose up -d --build
 ```
 
-Open `http://localhost:3000`, paste the token, then drop, paste or choose files. The token stays in page memory only.
+Open `http://localhost:3000`. Visitors see the project page. Sign in with the token at the bottom of it to get the upload page, then drop, paste or choose files. Sign-in sets an HttpOnly session cookie derived from the token for 30 days; rotating the token signs every browser out.
 
 For production, put it behind a reverse proxy. See [deployment](docs/deployment.md).
 
@@ -31,7 +31,7 @@ curl --fail-with-body -X DELETE \
 ```
 
 - Names become ASCII slugs with a random suffix. Ids are 128-bit random.
-- Downloads support `Range`, so videos can seek. They also get a sandboxing CSP.
+- Downloads support `Range`, so videos can seek. They also get a sandboxing CSP and `max-age=300`, so a deleted file leaves a CDN cache within minutes.
 - The server builds returned URLs from the request's `Host` and `X-Forwarded-Proto`.
 - Links are public. Do not upload secrets or sensitive logs.
 
@@ -44,9 +44,10 @@ curl --fail-with-body -X DELETE \
 
 ## Agent skill
 
-`skill/file-upload` teaches Claude Code or Codex to upload files and embed the links in PRs. Copy it into the agent's skills directory (`~/.claude/skills` or `~/.codex/skills`). Then put the token in `~/.config/file-upload.env` with mode `0600`:
+`skill/file-upload` teaches Claude Code or Codex to upload files and embed the links in PRs. Copy it into the agent's skills directory (`~/.claude/skills` or `~/.codex/skills`). Then put the host and token in `~/.config/file-upload.env` with mode `0600`:
 
 ```bash
+export FILE_HOST_URL='https://files.example.com'   # defaults to https://files.lbgos.dev
 export FILE_HOST_TOKEN='<token>'
 ```
 

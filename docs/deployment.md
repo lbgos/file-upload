@@ -37,7 +37,7 @@ proxy_send_timeout 300s;
 
 Keep the DNS record proxied. Cloudflare Free and Pro reject request bodies over 100 MB, so keep `MAX_FILE_BYTES` below that. The default is 90 MiB.
 
-The server marks `/f/*` responses immutable. After a delete, Cloudflare can keep serving its cached copy until it expires or you purge it. Add a cache bypass rule for `/f/*` if deletes must take effect immediately.
+`/f/*` responses carry `cache-control: public, max-age=300`. After a delete, Cloudflare can serve its cached copy for up to five minutes. Purge the URL or add a cache bypass rule for `/f/*` if deletes must take effect immediately.
 
 ## Check
 

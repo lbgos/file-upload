@@ -158,7 +158,7 @@ test("rejects path traversal in the public filename", async (t) => {
   assert.equal(traversal.statusCode, 404);
 });
 
-test("rejects malformed filename encoding and serves health and UI", async (t) => {
+test("rejects malformed filename encoding and serves health", async (t) => {
   const { app } = await fixture();
   t.after(() => app.close());
   const malformed = await app.inject({
@@ -168,10 +168,44 @@ test("rejects malformed filename encoding and serves health and UI", async (t) =
     payload: "x",
   });
   const health = await app.inject({ method: "GET", url: "/healthz" });
-  const page = await app.inject({ method: "GET", url: "/" });
 
   assert.equal(malformed.statusCode, 400);
   assert.deepEqual(health.json(), { ok: true });
-  assert.match(page.body, /files\.lbgos\.dev/u);
-  assert.match(page.body, /drop/u);
+});
+
+test("browser session: only the token signs in, the cookie authorizes uploads and the upload page", async (t) => {
+  const { app } = await fixture();
+  t.after(() => app.close());
+  const isUploadPage = (body: string) => body.includes('id="drop-zone"');
+
+  const anonymous = await app.inject({ method: "GET", url: "/" });
+  assert.equal(isUploadPage(anonymous.body), false);
+  assert.match(anonymous.body, /id="sign-in"/u);
+  assert.equal(anonymous.headers["cache-control"], "private, no-store");
+
+  const forged = "fu_session=forged";
+  assert.equal(isUploadPage((await app.inject({ method: "GET", url: "/", headers: { cookie: forged } })).body), false);
+  const forgedUpload = await app.inject({ method: "PUT", url: "/x.txt", headers: { cookie: forged }, payload: "x" });
+  assert.equal(forgedUpload.statusCode, 401);
+  assert.equal((await app.inject({ method: "POST", url: "/api/session", headers: { "x-upload-token": "wrong" } })).statusCode, 401);
+
+  const signIn = await app.inject({
+    method: "POST",
+    url: "/api/session",
+    headers: { "x-upload-token": TOKEN, "x-forwarded-proto": "https" },
+  });
+  assert.equal(signIn.statusCode, 204);
+  const setCookie = String(signIn.headers["set-cookie"]);
+  assert.match(setCookie, /HttpOnly; SameSite=Lax; Secure$/u);
+  assert.equal(setCookie.includes(TOKEN), false);
+  const cookie = setCookie.split(";")[0] ?? "";
+
+  assert.equal(isUploadPage((await app.inject({ method: "GET", url: "/", headers: { cookie } })).body), true);
+  const uploaded = await app.inject({ method: "PUT", url: "/x.txt", headers: { cookie }, payload: "x" });
+  assert.equal(uploaded.statusCode, 201);
+  // A cookie alone cannot mint a new session.
+  assert.equal((await app.inject({ method: "POST", url: "/api/session", headers: { cookie } })).statusCode, 401);
+
+  const signOut = await app.inject({ method: "DELETE", url: "/api/session" });
+  assert.match(String(signOut.headers["set-cookie"]), /^fu_session=; Path=\/; Max-Age=0;/u);
 });
